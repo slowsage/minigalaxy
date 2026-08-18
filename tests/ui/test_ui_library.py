@@ -23,6 +23,8 @@ sys.modules['minigalaxy.ui.gametile'] = m_gametile
 sys.modules['minigalaxy.ui.gametilelist'] = m_gametilelist
 sys.modules['minigalaxy.ui.categoryfilters'] = m_categoryfilters
 from minigalaxy.game import Game           # noqa: E402
+from minigalaxy.ui.gametile import GameTile  # noqa: E402
+from minigalaxy.ui import library as library_module  # noqa: E402
 from minigalaxy.ui.library import Library, get_installed_windows_games, read_game_categories_file, \
     update_game_categories_file  # noqa: E402
 
@@ -50,12 +52,9 @@ class TestLibrary(TestCase):
         api_games = []
         for game in API_GAMES:
             api_games.append(Game(name=game, game_id=int(API_GAMES[game]),))
-        err_msg = ""
-        api_mock = MagicMock()
-        api_mock.get_library.return_value = api_games, err_msg
-        test_library = Library(MagicMock(), self.mock_config, api_mock, MagicMock())
+        test_library = Library(MagicMock(), self.mock_config, MagicMock(), MagicMock())
         test_library.games = self_games
-        test_library._Library__add_games_from_api()
+        test_library._Library__merge_api_games(api_games, "")
         exp = len(API_GAMES)
         obs = len(test_library.games)
         self.assertEqual(exp, obs)
@@ -67,12 +66,9 @@ class TestLibrary(TestCase):
         api_games = []
         for game in API_GAMES:
             api_games.append(Game(name=game, game_id=int(API_GAMES[game]),))
-        err_msg = ""
-        api_mock = MagicMock()
-        api_mock.get_library.return_value = api_games, err_msg
-        test_library = Library(MagicMock(), self.mock_config, api_mock, MagicMock())
+        test_library = Library(MagicMock(), self.mock_config, MagicMock(), MagicMock())
         test_library.games = self_games
-        test_library._Library__add_games_from_api()
+        test_library._Library__merge_api_games(api_games, "")
         exp = True
         obs = Game(name="Stellaris (English)", game_id=1508702879,) in test_library.games
         self.assertEqual(exp, obs)
@@ -87,12 +83,9 @@ class TestLibrary(TestCase):
             api_games.append(Game(name=game, game_id=int(API_GAMES[game]),))
         api_gmae_with_id = Game(name="Game without ID", game_id=1234567890)
         api_games.append(api_gmae_with_id)
-        err_msg = ""
-        api_mock = MagicMock()
-        api_mock.get_library.return_value = api_games, err_msg
-        test_library = Library(MagicMock(), self.mock_config, api_mock, MagicMock())
+        test_library = Library(MagicMock(), self.mock_config, MagicMock(), MagicMock())
         test_library.games = self_games
-        test_library._Library__add_games_from_api()
+        test_library._Library__merge_api_games(api_games, "")
         exp = True
         obs = api_gmae_with_id in test_library.games
         self.assertEqual(exp, obs)
@@ -109,12 +102,9 @@ class TestLibrary(TestCase):
         for game in API_GAMES:
             api_games.append(Game(name=game, game_id=int(API_GAMES[game]), url="http://test_url{}".format(str(url_nr))))
             url_nr += 1
-        err_msg = ""
-        api_mock = MagicMock()
-        api_mock.get_library.return_value = api_games, err_msg
-        test_library = Library(MagicMock(), self.mock_config, api_mock, MagicMock())
+        test_library = Library(MagicMock(), self.mock_config, MagicMock(), MagicMock())
         test_library.games = self_games
-        test_library._Library__add_games_from_api()
+        test_library._Library__merge_api_games(api_games, "")
         exp = "http://test_url1"
         obs = test_library.games[0].url
         self.assertEqual(exp, obs)
@@ -126,12 +116,9 @@ class TestLibrary(TestCase):
         api_games = []
         for game in API_GAMES:
             api_games.append(Game(name=game, game_id=int(API_GAMES[game])))
-        err_msg = ""
-        api_mock = MagicMock()
-        api_mock.get_library.return_value = api_games, err_msg
-        test_library = Library(MagicMock(), self.mock_config, api_mock, MagicMock())
+        test_library = Library(MagicMock(), self.mock_config, MagicMock(), MagicMock())
         test_library.games = self_games
-        test_library._Library__add_games_from_api()
+        test_library._Library__merge_api_games(api_games, "")
         exp = "Neverwinter Nights: Enhanced Edition"
         obs = test_library.games[0].name
         self.assertEqual(exp, obs)
@@ -139,12 +126,9 @@ class TestLibrary(TestCase):
     def test6_add_games_from_api(self):
         self_games = [Game(name="Torchlight 2", game_id=0, install_dir="/home/user/GoG Games/Torchlight II")]
         api_games = [Game(name="Torchlight II", game_id=1958228073)]
-        err_msg = ""
-        api_mock = MagicMock()
-        api_mock.get_library.return_value = api_games, err_msg
-        test_library = Library(MagicMock(), self.mock_config, api_mock, MagicMock())
+        test_library = Library(MagicMock(), self.mock_config, MagicMock(), MagicMock())
         test_library.games = self_games
-        test_library._Library__add_games_from_api()
+        test_library._Library__merge_api_games(api_games, "")
         exp = 1
         obs = len(test_library.games)
         self.assertEqual(exp, obs)
@@ -245,6 +229,187 @@ class TestLibrary(TestCase):
             tmpfile.seek(os.SEEK_SET)
             actual = json.load(tmpfile)
             self.assertDictEqual(actual, expected)
+
+    def _tile_library(self, installed, api_games, err_msg=""):
+        config = MagicMock()
+        config.locale = "en"
+        config.installed_filter = False
+        config.platform_mode = ["linux"]
+        config.view = "grid"
+        config.current_downloads = []
+        config.show_hidden_games = True
+        api = MagicMock()
+        api.get_owned_products_ids.return_value = []
+        api.get_library.return_value = api_games, err_msg
+        library = Library(MagicMock(), config, api, MagicMock())
+        library.flowbox.get_children.return_value = []
+        library._Library__get_installed_games = MagicMock(return_value=installed)
+        GameTile.reset_mock()
+        library.flowbox.reset_mock()
+        library.flowbox.get_children.return_value = []
+        return library
+
+    def _added_tile_games(self):
+        return [call.args[1] for call in GameTile.call_args_list]
+
+    def _mixed_library_games(self, tmpdir):
+        """Installed linux + windows-only rows mixed with uninstalled linux titles.
+
+        This is the shape that skipped Pillars / Tyranny / VVVVVV when tiles
+        were created by walking fixed index chunks over a list that shrank
+        mid-walk as windows-only entries got pruned.
+        """
+        installed = Game(name="Installed Linux", game_id=1, install_dir=tmpdir, platform="linux")
+        pillars = Game(name="Pillars of Eternity", game_id=1207666813, platform="linux")
+        tyranny = Game(name="Tyranny", game_id=1207666814, platform="linux")
+        vvvvvv = Game(name="VVVVVV", game_id=1207666815, platform="linux")
+        windows = [Game(name=f"Windows Only {i}", game_id=9000 + i, platform="windows") for i in range(6)]
+        api_games = [
+            Game(name="Installed Linux", game_id=1, platform="linux"),
+            windows[0], windows[1],
+            pillars,
+            windows[2],
+            tyranny,
+            windows[3],
+            vvvvvv,
+            windows[4], windows[5],
+        ]
+        return [installed], api_games, [pillars, tyranny, vvvvvv], windows
+
+    def test_update_library_does_not_skip_uninstalled_linux_games(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            installed, api_games, expected_linux, _windows = self._mixed_library_games(tmpdir)
+            library = self._tile_library(installed, api_games)
+            library._library_generation = 1
+            library._Library__update_library(1)
+
+            added_ids = {game.id for game in self._added_tile_games()}
+            self.assertIn(installed[0].id, added_ids)
+            for game in expected_linux:
+                self.assertIn(game.id, added_ids, f"{game.name} should have a tile")
+
+    def test_update_library_removes_windows_only_games(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            installed, api_games, expected_linux, windows = self._mixed_library_games(tmpdir)
+            library = self._tile_library(installed, api_games)
+            library._library_generation = 1
+            library._Library__update_library(1)
+
+            remaining_ids = {game.id for game in library.games}
+            added_ids = {game.id for game in self._added_tile_games()}
+            for game in windows:
+                self.assertNotIn(game.id, remaining_ids)
+                self.assertNotIn(game.id, added_ids)
+            for game in expected_linux:
+                self.assertIn(game.id, remaining_ids)
+
+    def test_update_library_keeps_installed_windows_games(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            installed_windows = Game(
+                name="Installed Windows", game_id=42, install_dir=tmpdir, platform="windows"
+            )
+            api_windows = Game(name="Installed Windows", game_id=42, platform="windows")
+            downloadable_windows = Game(name="Uninstalled Windows", game_id=43, platform="windows")
+            library = self._tile_library([installed_windows], [api_windows, downloadable_windows])
+            library._library_generation = 1
+            library._Library__update_library(1)
+
+            remaining_ids = {game.id for game in library.games}
+            added_ids = {game.id for game in self._added_tile_games()}
+            self.assertIn(42, remaining_ids)
+            self.assertIn(42, added_ids)
+            self.assertNotIn(43, remaining_ids)
+            self.assertNotIn(43, added_ids)
+
+    def test_update_library_defers_api_tiles_until_installed_batches_finish(self):
+        """Even if the API idle callback is ready before the installed batch
+        chain has finished, its tiles must not be created until that chain
+        completes -- this is the ordering guarantee _installed_batch_pending
+        and _deferred_api_apply exist to enforce."""
+        idle_queue = []
+
+        def queue_idle(func, *args):
+            idle_queue.append((func, args))
+            return 0
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            installed = [
+                Game(name=f"Installed {i:02d}", game_id=i, install_dir=tmpdir, platform="linux")
+                for i in range(1, 8)
+            ]
+            downloadable = [Game(name=f"Downloadable {i}", game_id=100 + i, platform="linux") for i in range(3)]
+            api_games = [
+                Game(name=game.name, game_id=game.id, platform="linux") for game in installed
+            ] + downloadable
+            library = self._tile_library(installed, api_games)
+            library._library_generation = 1
+            with patch.object(library_module.GLib, "idle_add", side_effect=queue_idle):
+                library._Library__update_library(1)
+                # queue is now: [load_tile_states, apply_installed_games, apply_api_games]
+                func, args = idle_queue.pop(0)
+                func(*args)  # load_tile_states
+                func, args = idle_queue.pop(0)
+                func(*args)  # apply_installed_games: creates the first 5-tile batch,
+                self.assertEqual(5, len(self._added_tile_games()))  # queues the rest, pending=True
+
+                func, args = idle_queue.pop(0)
+                func(*args)  # apply_api_games runs while pending is still True: must defer
+                self.assertEqual(5, len(self._added_tile_games()))
+
+                while idle_queue:
+                    func, args = idle_queue.pop(0)
+                    func(*args)
+
+                added_ids = [game.id for game in self._added_tile_games()]
+                self.assertEqual([game.id for game in installed], added_ids[:len(installed)])
+                self.assertEqual([game.id for game in downloadable], added_ids[len(installed):])
+
+    def test_stale_generation_apply_is_ignored(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            installed, api_games, expected_linux, _windows = self._mixed_library_games(tmpdir)
+            library = self._tile_library(installed, api_games)
+            library._library_generation = 2
+            library._Library__apply_installed_games(installed, 1)
+            library._Library__apply_api_games(api_games, "", 1)
+
+            self.assertEqual([], library.games)
+            self.assertEqual([], self._added_tile_games())
+
+    def test_stale_generation_stops_batch_chain_mid_flight(self):
+        """Regression test for the actual thread race: update_library() being
+        called again (e.g. two quick clicks on the header sync button) while
+        a previous run's tile batches are still queued must not let the
+        superseded run keep mutating the library once it's no longer current."""
+        idle_queue = []
+
+        def queue_idle(func, *args):
+            idle_queue.append((func, args))
+            return 0
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            installed = [
+                Game(name=f"Installed {i}", game_id=i, install_dir=tmpdir, platform="linux")
+                for i in range(12)
+            ]
+            library = self._tile_library(installed, [])
+            with patch.object(library_module.GLib, "idle_add", side_effect=queue_idle):
+                library._library_generation = 1
+                library._Library__update_library(1)
+
+                func, args = idle_queue.pop(0)
+                func(*args)  # load_tile_states
+                func, args = idle_queue.pop(0)
+                func(*args)  # apply_installed_games: only the first batch of 5 tiles
+                self.assertEqual(5, len(self._added_tile_games()))
+
+                # a newer update_library() call supersedes generation 1 mid-batch
+                library._library_generation = 2
+
+                # draining the rest of generation 1's queue must be a no-op
+                while idle_queue:
+                    func, args = idle_queue.pop(0)
+                    func(*args)
+                self.assertEqual(5, len(self._added_tile_games()))
 
 
 del sys.modules['gi']

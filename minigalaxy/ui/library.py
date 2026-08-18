@@ -4,7 +4,6 @@ import logging
 import os
 import re
 import threading
-import time
 
 from minigalaxy.api import Api
 from minigalaxy.config import Config
@@ -52,6 +51,9 @@ class Library(Gtk.Viewport):
         self.owned_products_ids = []
         self._queue = []
         self.category_filters = []
+        self._library_generation = 0
+        self._installed_batch_pending = False
+        self._deferred_api_apply = None
         self.configure_library_sort()
 
     def _debounce(self, thunk):
@@ -72,33 +74,63 @@ class Library(Gtk.Viewport):
         self.update_library()
 
     def update_library(self) -> None:
-        library_update_thread = threading.Thread(target=self.__update_library)
+        self._library_generation += 1
+        generation = self._library_generation
+        library_update_thread = threading.Thread(target=self.__update_library, args=(generation,))
         library_update_thread.daemon = True
         library_update_thread.start()
 
-    def __update_library(self):
+    def __update_library(self, generation):
+        # Worker thread only fetches data; every self.games write happens on
+        # the GTK main thread below (via GLib.idle_add) so it never races the
+        # main thread, and a stale generation is dropped instead of applied.
         GLib.idle_add(self.__load_tile_states)
         self.owned_products_ids = self.api.get_owned_products_ids()
-        # Get already installed games first
-        self.games = self.__get_installed_games()
-        self.__create_gametiles_iteratively(5)
+        installed = self.__get_installed_games()
+        GLib.idle_add(self.__apply_installed_games, installed, generation)
 
-        # Get games from the API
-        self.__add_games_from_api()
-        self.__create_gametiles_iteratively(5)
-        GLib.idle_add(self.filter_library)
+        logging.info("Start retrieving owned games from the api...")
+        retrieved_games, err_msg = self.api.get_library()
+        GLib.idle_add(self.__apply_api_games, retrieved_games, err_msg, generation)
 
-    def __create_gametiles_iteratively(self, step_width=5):
-        if len(self.games) < step_width*2:
-            GLib.idle_add(self.__create_gametiles)
-            return
+    def __apply_installed_games(self, installed, generation):
+        if generation != self._library_generation:
+            return False
+        self.games = list(installed)
+        self.filter_library()
+        self._installed_batch_pending = True
+        self._deferred_api_apply = None
+        self.__queue_gametile_batch(list(self.games), generation, 0)
+        return False
 
-        index = 0
-        while index < len(self.games):
-            games_chunk = self.games[index:index+step_width]
-            GLib.idle_add(self.__create_gametiles, games_chunk)
-            index += step_width
-            time.sleep(0.1)
+    def __apply_api_games(self, retrieved_games, err_msg, generation):
+        if generation != self._library_generation:
+            return False
+        if self._installed_batch_pending:
+            # Installed tiles are still batching in; apply once that finishes
+            # so installed tiles always finish before any API tile appears.
+            self._deferred_api_apply = (retrieved_games, err_msg)
+            return False
+        self.__merge_api_games(retrieved_games, err_msg)
+        self.filter_library()
+        self.__queue_gametile_batch(list(self.games), generation, 0)
+        return False
+
+    def __queue_gametile_batch(self, games, generation, index, step_width=5):
+        if generation != self._library_generation:
+            return False
+        self.__create_gametiles(games[index:index + step_width])
+        next_index = index + step_width
+        if next_index < len(games):
+            GLib.idle_add(self.__queue_gametile_batch, games, generation, next_index)
+            return False
+        if self._installed_batch_pending:
+            self._installed_batch_pending = False
+            deferred = self._deferred_api_apply
+            self._deferred_api_apply = None
+            if deferred:
+                self.__apply_api_games(deferred[0], deferred[1], generation)
+        return False
 
     def __load_tile_states(self):
         for child in self.flowbox.get_children():
@@ -232,9 +264,7 @@ class Library(Gtk.Viewport):
 
         return games
 
-    def __add_games_from_api(self):
-        logging.info("Start retrieving owned games from the api...")
-        retrieved_games, err_msg = self.api.get_library()
+    def __merge_api_games(self, retrieved_games, err_msg):
         if not err_msg:
             self.offline = False
         else:
